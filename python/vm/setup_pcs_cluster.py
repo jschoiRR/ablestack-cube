@@ -46,13 +46,40 @@ def createArgumentParser():
     return parser
 
 def setupPcsCluster(args):
-    
+
     success_bool = True
 
+    # psc 구성한 3대의 호스트 crontab에 ccvm 스냅샷 기능 추가
+    for host in args.host_names:
+        check_err = 0
+        
+        check_err = os.system("ssh root@"+host+" \"rm -f /var/spool/cron/tmpfile\"")
+        if check_err != 0 :
+            return createReturn(code=500, val=host+" : /var/spool/cron/tmpfile delete failed")
 
+        # /var/spool/cron/root 파일이 존재하면 실행 (file_exist 값이 0 이면 존재)
+        file_exist = os.system("ssh root@"+host+" \"ls /var/spool/cron |grep root > /dev/null\"")
+        if file_exist == 0 :
+            check_err = os.system("ssh root@"+host+" \"awk '!/create_ccvm_snap.py/' /var/spool/cron/root > /var/spool/cron/tmpfile && mv -f /var/spool/cron/tmpfile /var/spool/cron/root\"")
+            if check_err != 0 :
+                return createReturn(code=500, val=host+" : awk '!/create_ccvm_snap.py/' failed")
+
+        # crontab에 등록
+        check_err = os.system("ssh root@"+host+" \"echo -e \'0 1 * * * /usr/bin/python3 /usr/share/cockpit/ablestack/python/ccvm_snap/create_ccvm_snap.py\' >> /var/spool/cron/root | chmod 600 /var/spool/cron/root\"")
+        if check_err != 0 :
+            return createReturn(code=500, val=host+" : cron registration failed")
+
+        # crond 재시작
+        check_err = os.system("ssh root@"+host+" \"systemctl restart crond.service\"")
+        if check_err != 0 :
+            return createReturn(code=500, val=host+" : systemctl restart crond.service failed")
+
+    
     #=========== pcs cluster 구성 ===========
     # ceph 이미지 등록
     os.system("qemu-img convert -f qcow2 -O rbd /var/lib/libvirt/images/ablestack-template-back.qcow2 rbd:rbd/ccvm")
+    # ccvm image resize
+    os.system("rbd resize -s 500G ccvm")
 
     # 클러스터 구성
     result = json.loads(python3(pluginpath + '/python/pcs/main.py', 'config', '--cluster', 'cloudcenter_cluster', '--hosts', args.host_names[0], args.host_names[1], args.host_names[2] ).stdout.decode())
@@ -65,13 +92,13 @@ def setupPcsCluster(args):
         success_bool = False
 
     #ccvm이 정상적으로 생성 되었는지 확인
-    domid_check = ""
+    domid_check = 0
     cnt_num = 0
     while True:
         time.sleep(1)
         cnt_num += 1
         domid_check = os.system("virsh domid ccvm > /dev/null")
-        if domid_check == 0 or cnt_num > 60:
+        if domid_check == 0 or cnt_num > 300:
             break
 
     if domid_check != 0:
@@ -98,3 +125,4 @@ if __name__ == '__main__':
     # 실제 로직 부분 호출 및 결과 출력
     ret = setupPcsCluster(args)
     print(ret)
+

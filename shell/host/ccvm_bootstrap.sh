@@ -9,6 +9,9 @@
 #########################################
 set -x
 LOGFILE="/var/log/cloud_install.log"
+
+hosts=$(grep -v mngt /etc/hosts | grep -v scvm | grep -v pn | grep -v localhost | awk {'print $1'})
+
 systemctl enable --now mysqld
 DATABASE_PASSWD="Ablecloud1!"
 ################# firewall setting
@@ -42,9 +45,28 @@ firewall-cmd --reload
 firewall-cmd --list-all 2>&1 | tee -a $LOGFILE
 
 
+# resize partition
+sgdisk -e /dev/vda
+parted --script /dev/vda resizepart 3 100%
+pvresize /dev/vda3
+lvcreate cs_ablestack-cerato -n nfs --extents 100%FREE
+mkfs.xfs /dev/cs_ablestack-cerato/nfs
+mkdir /nfs
+echo  '/dev/mapper/cs_ablestack--cerato-nfs /nfs                    xfs    defaults        0 0' >> /etc/fstab
+echo '/nfs *(rw,no_root_squash,async)' >> /etc/exports
+systemctl enable --now nfs-server.service
+
+mkdir /nfs/primary
+mkdir /nfs/secondary
+
+# Crushmap 설정 추가 (ceph autoscale)
+scvm=$(grep scvm-mngt /etc/hosts | awk {'print $1'})
+ssh -o StrictHostKeyChecking=no $scvm /usr/local/sbin/setCrushmap.sh
+
 ################# Setting Database
 mysqladmin -uroot password $DATABASE_PASSWD
 setenforce 0
+systemctl enable --now cloudstack-usage
 sed -i 's/SELINUX=enforcing/SELINUX=permissive/g' /etc/selinux/config
 cloudstack-setup-databases cloud:$DATABASE_PASSWD --deploy-as=root:$DATABASE_PASSWD  2>&1 | tee -a $LOGFILE
 
@@ -66,4 +88,44 @@ cloudstack-setup-management  2>&1 | tee -a $LOGFILE
 
 systemctl enable --now cloudstack-management
 
+#UEFI 설정 파일 생성
+echo -e "guest.nvram.template.secure=/usr/share/edk2/ovmf/OVMF_VARS.secboot.fd
+guest.nvram.template.legacy=/usr/share/edk2/ovmf/OVMF_VARS.fd
+guest.loader.secure=/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd
+guest.loader.legacy=/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd
+guest.nvram.path=/var/lib/libvirt/qemu/nvram/" > /root/uefi.properties
+
+for host in $hosts
+do
+  scp -o StrictHostKeyChecking=no /root/uefi.properties $host:/etc/cloudstack/agent/
+done
+
+rm -rf /root/uefi.properties
+
+
+#tpm 설정 파일 생성
+echo -e "host.tpm.enable=true" > /root/tpm.properties
+
+for host in $hosts
+do
+  scp -o StrictHostKeyChecking=no /root/tpm.properties $host:/etc/cloudstack/agent/
+done
+
+rm -rf /root/tpm.properties
+
+#systemvm template 등록
+/usr/share/cloudstack-common/scripts/storage/secondary/cloud-install-sys-tmplt \
+-m /nfs/secondary \
+-f /usr/share/ablestack/systemvmtemplate-* \
+-h kvm -F
+
+for host in $hosts
+do
+  ssh -o StrictHostKeyChecking=no $host /usr/bin/systemctl enable --now pacemaker
+  ssh -o StrictHostKeyChecking=no $host /usr/bin/systemctl enable --now corosync
+done
+
+# Delete container image file
+rm -rf /usr/share/ablestack/*.tar
+# Delete bootstrap script file
 rm -rf /root/bootstrap.sh

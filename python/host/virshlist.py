@@ -13,6 +13,9 @@ import os
 import sh
 import pprint
 import json
+import socket
+import subprocess
+
 
 from ablestack import *
 from sh import ssh
@@ -59,10 +62,10 @@ for vm in vms:
                 vm['DISK_PHY'] = items[3]
                 vm['DISK_USAGE_RATE'] = items[4]
         if vm['State'] == "running":
-            ret = virsh_cmd('domifaddr', domain=vm['Name'], source='agent', interface='ens20',
+            ret = virsh_cmd('domifaddr', domain=vm['Name'], source='agent', interface='enp0s20',
                             full=True).stdout.decode().splitlines()
             for line in ret[:-1]:
-                if 'ipv4' in line and 'ens20' in line:
+                if 'ipv4' in line and 'enp0s20' in line:
                     items = line.split(maxsplit=4)
                     ipPrefix = items[3]
                     ipSplit = ipPrefix.split('/')
@@ -75,9 +78,29 @@ for vm in vms:
                     items = line.split()
                     vm['nictype'] = items[1]
                     vm['nicbridge'] = items[2]
-        ret = ssh('-o', 'StrictHostKeyChecking=no', 'ccvm-mngt', '/usr/sbin/route', '-n', '|', 'grep', '-P', '"^0.0.0.0|UG"').stdout.decode().splitlines()
-        for line in ret[:]:
-            items = line.split()
-            vm['GW'] = items[1]
+        try:
+            ret = ssh('-o', 'StrictHostKeyChecking=no', 'ccvm-mngt', '/usr/sbin/route', '-n', '|', 'grep', '-P', '"^0.0.0.0|UG"').stdout.decode().splitlines()
+            for line in ret[:]:
+                items = line.split()
+                vm['GW'] = items[1]
+        except Exception as e:
+            pass
+        # DNS 정보 확인
+        try:
+            ret = ssh('-o', 'StrictHostKeyChecking=no', 'ccvm-mngt', '/usr/bin/cat', '-n', '/etc/resolv.conf', '|', 'awk', "'$1 == 2 {print $3}'").stdout.decode().splitlines()
+            for line in ret[:]:
+                items = line.split()
+                vm['DNS'] = items[0]
+        except Exception as e:
+            pass
+
+        try :
+            vm['MOLD_SERVICE_STATUE'] = ssh('-o', 'StrictHostKeyChecking=no', 'ccvm-mngt', 'systemctl is-active cloudstack-management.service').stdout.decode().splitlines()
+        except Exception as e:
+            vm['MOLD_SERVICE_STATUE'] = 'inactive'.splitlines()
+        try :
+            vm['MOLD_DB_STATUE'] = ssh('-o', 'StrictHostKeyChecking=no', 'ccvm-mngt', 'systemctl is-active mysqld').stdout.decode().splitlines()
+        except Exception as e:
+            vm['MOLD_DB_STATUE'] = 'inactive'.splitlines()
 
 print(json.dumps(vms, indent=2))

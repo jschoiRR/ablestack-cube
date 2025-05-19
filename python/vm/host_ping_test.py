@@ -28,7 +28,7 @@ def createArgumentParser():
 
     # 인자 추가: https://docs.python.org/ko/3/library/argparse.html#the-add-argument-method
 
-    parser.add_argument('-hns', '--host-names', metavar=('[hostname1]','[hostname2]','[hostname3]'), type=str, nargs=3, help='input Value to three host names', required=True)
+    parser.add_argument('-hns', '--host-names', type=str, nargs='*', help='input Value to three host names', required=True)
 
     # output 민감도 추가(v갯수에 따라 output및 log가 많아짐):
     parser.add_argument('-v', '--verbose', action='count', default=0, help='increase output verbosity')
@@ -56,13 +56,13 @@ def hostPingTest(args):
             else:
                 item["host"] = host
                 item["status"] = 'down'
-                ret_text += host+"와 네트워크 테스트 실패하였습니다\n"
+                ret_text += host+" network ip ping 테스트 실패\n"
 
             ret_val.append(item)
 
         # ex : ssh root@host echo 명령을 수행시 인증이 되어있으면 바로 응답이 오는데 인증이 되어있지 않으면 정상응답이 오지 않음
         # 핑거프린트 해결을 위해 ssh-scan.py 호출
-        python3(pluginpath+'/python/host/ssh-scan.py')
+        #python3(pluginpath+'/python/host/ssh-scan.py')
 
         if ret_text == "":
             return createReturn(code=200, val="host ping test success")
@@ -71,7 +71,7 @@ def hostPingTest(args):
 
     except Exception as e:
         # 결과값 리턴
-        print(e)
+        #print(e)
         return createReturn(code=500, val={})
 
 # Press the green button in the gutter to run the script.
